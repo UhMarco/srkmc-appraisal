@@ -272,6 +272,28 @@
   }
 
   // ---- paste import -------------------------------------------------------
+  // Handles both the in-game inventory copy ("Name<tab>Qty<tab>Group<tab>...") and the
+  // contract-contents copy ("Name<tab>Qty<tab>Type<tab>Category"). The name is the first
+  // column; the quantity is the first numeric column after it; trailing columns are ignored.
+  function parsePasteLine(line) {
+    const cols = line.split(/\t+|\s{2,}/).map((s) => s.trim()).filter(Boolean);
+    if (cols.length >= 2) {
+      for (let i = 1; i < cols.length; i++) {
+        if (/^[\d.,\s]+$/.test(cols[i])) {
+          const q = parseQty(cols[i]);
+          if (Number.isFinite(q) && q > 0) return { name: cols[0], qty: q };
+        }
+      }
+    }
+    // fallback: single-space "Name 1234" (hand-typed, no tabs/columns)
+    const m = line.match(/^(.+?)\s+([\d.,]+)$/);
+    if (m) {
+      const q = parseQty(m[2]);
+      if (Number.isFinite(q) && q > 0) return { name: m[1].trim(), qty: q };
+    }
+    return null;
+  }
+
   function importPaste() {
     const text = els.pasteInput.value;
     if (!text.trim()) { els.pasteStatus.textContent = "nothing to import"; return; }
@@ -282,25 +304,12 @@
     for (const raw of lines) {
       const line = raw.trim();
       if (!line) continue;
-      // split into tokens on tabs / multi-space; last numeric token = qty
-      const parts = line.split(/\t|\s{2,}|\s+(?=[\d.,  ]+$)/).map((s) => s.trim()).filter(Boolean);
-      let qty = NaN, namePart = line;
-      if (parts.length >= 2) {
-        const last = parts[parts.length - 1];
-        const q = parseQty(last);
-        if (Number.isFinite(q)) { qty = q; namePart = parts.slice(0, -1).join(" "); }
-      }
-      if (!Number.isFinite(qty)) {
-        // try: trailing number anywhere at end
-        const m = line.match(/^(.*?)[\s\t]+([\d.,  ]+)$/);
-        if (m) { const q = parseQty(m[2]); if (Number.isFinite(q)) { qty = q; namePart = m[1]; } }
-      }
-      const key = namePart.trim().toLowerCase();
-      const ore = byName.get(key);
-      if (!ore || !Number.isFinite(qty) || qty <= 0) { unmatched.push(line); continue; }
+      const parsed = parsePasteLine(line);
+      const ore = parsed ? byName.get(parsed.name.toLowerCase()) : null;
+      if (!ore) { unmatched.push(line); continue; }
 
       const existed = haul.has(ore.raw);
-      addToHaul(ore, qty);
+      addToHaul(ore, parsed.qty);
       if (existed) merged++; else added++;
     }
 

@@ -57,7 +57,7 @@
       <form id="add-form" class="add-row" autocomplete="off">
         <div class="field grow">
           <label for="ore-input">ORE TYPE</label>
-          <input id="ore-input" placeholder="Search ore — e.g. Veldspar, Scordite iii, Bistot 4…" spellcheck="false"
+          <input id="ore-input" placeholder="Search ore — e.g. Veldspar, Scordite iii, Omber 4…" spellcheck="false"
                  autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="ac-menu">
           <div id="ac-menu" class="ac-menu hidden" role="listbox"></div>
         </div>
@@ -68,9 +68,9 @@
         <button type="submit" class="btn btn-primary">ADD</button>
       </form>
 
-      <details class="paste">
-        <summary>PASTE FROM INVENTORY</summary>
-        <p class="hint">Select items in your ore hold &rarr; right-click &rarr; <b>Copy</b>, then paste here. Lines like <code>Veldspar&nbsp;&nbsp;12,480</code> or <code>Compressed Bistot&nbsp;&nbsp;300</code> are recognised. Compressed quantities are converted to raw units automatically.</p>
+      <details class="paste" open>
+        <summary>PASTE FROM INVENTORY / CONTRACT</summary>
+        <p class="hint">Copy from your <b>ore hold</b> or a <b>contract's contents</b> and paste here. Each line's first column is the ore name and the first number after it is the quantity; any extra columns are ignored.</p>
         <textarea id="paste-input" rows="5" placeholder="Veldspar&#9;12480&#10;Compressed Scordite&#9;540&#10;Glacial Mass&#9;200"></textarea>
         <div class="paste-actions">
           <button type="button" id="paste-import" class="btn btn-ghost">IMPORT</button>
