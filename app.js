@@ -9,7 +9,12 @@
   "use strict";
 
   const REGION_THE_FORGE = 10000002;
+  const JITA_4_4_STATION = 60003760;
   const FUZZWORK = "https://market.fuzzwork.co.uk/aggregates/";
+
+  // alert thresholds (see buildAlerts) — easy to tune
+  const ALERT_FORM_RATIO = 1.25;     // a form's buy order >= this x the appraised unit value
+  const ALERT_NONJITA_RATIO = 1.05;  // best regional buy >= this x the Jita 4-4 buy
 
   // ---- lookups ------------------------------------------------------------
   const byName = new Map();     // lowercased name -> ore; both "x" and "compressed x" map here
@@ -21,7 +26,11 @@
   // ---- state --------------------------------------------------------------
   // haul: Map rawTypeId -> { ore, qty }   (qty always in RAW units)
   const haul = new Map();
-  let lastAppraisal = null; // { rows:[...], totalIsk, totalVol, at:Date }
+  let lastAppraisal = null; // { rows:[...], totalIsk, at:Date }
+  let buybackPct = 100;     // buyback rate the client pays, % of appraised value
+  let buybackRate = 1;      // buybackPct / 100
+  let sortKey = null;       // null | 'name' | 'qty' | 'value'
+  let sortDir = 1;          // 1 = ascending, -1 = descending
 
   // ---- elements -----------------------------------------------------------
   const $ = (id) => document.getElementById(id);
@@ -32,10 +41,11 @@
     table: $("haul-table"), body: $("haul-body"), empty: $("empty-state"),
     count: $("manifest-count"),
     appraiseBtn: $("appraise-btn"), clearBtn: $("clear-btn"),
-    totals: $("totals"), totalVol: $("total-vol"), totalIsk: $("total-isk"),
+    buybackRange: $("buyback-range"), buybackVal: $("buyback-val"), totalLabel: $("total-label"),
+    totals: $("totals"), totalIsk: $("total-isk"),
     resultActions: $("result-actions"), copyBtn: $("copy-btn"),
     actionStatus: $("action-status"), pricedAt: $("priced-at"),
-    toast: $("toast"),
+    toast: $("toast"), alertTip: $("alert-tip"),
   };
 
   // ---- formatting ---------------------------------------------------------
@@ -44,8 +54,6 @@
   const fmtIntIsk = (n) =>
     n == null ? "—" : Math.round(n).toLocaleString("en-US");
   const fmtQty = (n) => n.toLocaleString("en-US");
-  const fmtVol = (n) =>
-    n.toLocaleString("en-US", { maximumFractionDigits: 1 });
 
   // parse a quantity string: strips spaces, commas, and NBSP thousands separators
   function parseQty(str) {
@@ -133,15 +141,16 @@
 
     const appr = lastAppraisal ? new Map(lastAppraisal.rows.map((r) => [r.rawId, r])) : null;
 
-    for (const { ore, qty } of haul.values()) {
+    for (const { ore, qty } of sortedHaul(appr)) {
       const tr = document.createElement("tr");
       const r = appr ? appr.get(ore.raw) : null;
 
-      // ore name
+      // ore name (+ alert flag if the appraisal found a notable off-book buy order)
       const tdName = document.createElement("td");
       tdName.className = "c-ore";
       tdName.innerHTML =
         `<span class="ore-name">${ore.name}</span><span class="ore-cat">${ore.cat}</span>`;
+      if (r && r.alerts && r.alerts.length) tdName.appendChild(makeAlertFlag(r.alerts));
       tr.appendChild(tdName);
 
       // qty (editable)
@@ -185,7 +194,7 @@
       tdAct.className = "c-act";
       const rm = document.createElement("button");
       rm.className = "row-remove"; rm.textContent = "✕"; rm.title = "Remove";
-      rm.addEventListener("click", () => { removeFromHaul(ore.raw); lastAppraisal = null; afterChange(); });
+      rm.addEventListener("click", () => removeRow(ore.raw));
       tdAct.appendChild(rm);
       tr.appendChild(tdAct);
 
@@ -193,6 +202,56 @@
     }
 
     els.table.classList.toggle("appraised", !!appr);
+    updateSortIndicators();
+  }
+
+  // ordered copy of the haul for display, per the active sort
+  function sortedHaul(appr) {
+    const entries = [...haul.values()];
+    if (!sortKey) return entries;
+    const keyOf = (e) => {
+      if (sortKey === "name") return e.ore.name;
+      if (sortKey === "qty") return e.qty;
+      const r = appr ? appr.get(e.ore.raw) : null;        // value
+      return r && !r.unavailable ? r.lineValue : -Infinity;
+    };
+    return entries.sort((a, b) => {
+      const va = keyOf(a), vb = keyOf(b);
+      const cmp = sortKey === "name" ? va.localeCompare(vb) : va - vb;
+      return cmp * sortDir;
+    });
+  }
+
+  // Remove a line without forcing a re-appraisal: drop it from the stored result and
+  // recompute the total from the remaining priced rows.
+  function removeRow(rawId) {
+    removeFromHaul(rawId);
+    if (lastAppraisal) {
+      lastAppraisal.rows = lastAppraisal.rows.filter((r) => r.rawId !== rawId);
+      lastAppraisal.totalIsk = lastAppraisal.rows.reduce(
+        (s, r) => s + (r.unavailable ? 0 : r.lineValue), 0);
+      if (haul.size === 0) lastAppraisal = null;
+    }
+    render();
+    if (lastAppraisal) renderTotals();
+    else { els.totals.classList.add("hidden"); els.resultActions.classList.add("hidden"); }
+  }
+
+  // ---- sorting ------------------------------------------------------------
+  const sortableThs = Array.from(document.querySelectorAll("#haul-table th[data-sort]"));
+
+  function onSortClick(key) {
+    if (sortKey === key) sortDir = -sortDir;
+    else { sortKey = key; sortDir = key === "name" ? 1 : -1; } // names A→Z, numbers high→low
+    render();
+  }
+  function updateSortIndicators() {
+    for (const th of sortableThs) {
+      const active = th.dataset.sort === sortKey;
+      th.classList.toggle("sorted", active);
+      const ind = th.querySelector(".sort-ind");
+      if (ind) ind.textContent = active ? (sortDir > 0 ? " ▲" : " ▼") : "";
+    }
   }
 
   function afterChange() {
@@ -202,6 +261,45 @@
       els.resultActions.classList.add("hidden");
     }
   }
+
+  // The grid keeps gross appraised values; the buyback only adjusts the headline total.
+  // Below 100% the yellow number is the net payout and the label above it shows the
+  // pre-buyback value and how much is being subtracted.
+  function renderTotals() {
+    if (!lastAppraisal) return;
+    const gross = lastAppraisal.totalIsk;
+    const net = gross * buybackRate;
+    els.totalIsk.textContent = fmtIntIsk(net) + " ISK";
+    els.totalLabel.innerHTML = buybackPct < 100
+      ? `BEFORE BUYBACK ${fmtIntIsk(gross)} ISK`
+      : "APPRAISED VALUE";
+  }
+
+  // ---- alert flag + tooltip ----------------------------------------------
+  function makeAlertFlag(messages) {
+    const flag = document.createElement("span");
+    flag.className = "alert-flag";
+    flag.textContent = "!";
+    flag.tabIndex = 0;
+    flag.setAttribute("role", "button");
+    flag.setAttribute("aria-label", messages.join("  •  "));
+    flag.addEventListener("mouseenter", () => showTip(flag, messages));
+    flag.addEventListener("mouseleave", hideTip);
+    flag.addEventListener("focus", () => showTip(flag, messages));
+    flag.addEventListener("blur", hideTip);
+    return flag;
+  }
+  function showTip(anchor, messages) {
+    els.alertTip.innerHTML = messages.map((m) => `<div class="tip-line">${m}</div>`).join("");
+    els.alertTip.classList.remove("hidden");
+    const a = anchor.getBoundingClientRect();
+    const t = els.alertTip.getBoundingClientRect();
+    const maxLeft = window.scrollX + document.documentElement.clientWidth - t.width - 8;
+    const left = Math.min(Math.max(8, window.scrollX + a.left + a.width / 2 - t.width / 2), maxLeft);
+    els.alertTip.style.left = left + "px";
+    els.alertTip.style.top = (window.scrollY + a.bottom + 8) + "px";
+  }
+  function hideTip() { els.alertTip.classList.add("hidden"); }
 
   // ---- pricing ------------------------------------------------------------
   // mid = average of highest buy and lowest sell; if only one side exists use it.
@@ -215,11 +313,46 @@
     return null;
   }
 
-  async function fetchAggregates(typeIds) {
-    const url = `${FUZZWORK}?region=${REGION_THE_FORGE}&types=${typeIds.join(",")}`;
+  async function fetchAggregates(typeIds, scopeParam) {
+    const url = `${FUZZWORK}?${scopeParam}&types=${typeIds.join(",")}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error("market request failed (" + res.status + ")");
     return res.json();
+  }
+
+  const buyMaxOf = (agg) => {
+    const v = agg && agg.buy ? parseFloat(agg.buy.max) : 0;
+    return v > 0 ? v : 0;
+  };
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  // Informational flags (never affect the appraisal): surface buy orders that beat the
+  // conservative appraised value — a different ore form, or a non-Jita order in the region —
+  // so the user can decide to haul/sell those lines themselves instead.
+  function buildAlerts(ore, regData, jitaData, apprUnit) {
+    const out = [];
+    const forms = [
+      { name: "uncompressed", id: ore.raw },
+      { name: "compressed", id: ore.comp },
+    ];
+    forms.sort((a, b) => buyMaxOf(regData[b.id]) - buyMaxOf(regData[a.id]));
+    const best = forms[0];
+    const bestBuy = buyMaxOf(regData[best.id]);
+
+    // Case A: the best buy order (either form) sits well above the appraised value.
+    if (apprUnit > 0 && bestBuy >= apprUnit * ALERT_FORM_RATIO) {
+      out.push(`${cap(best.name)} buy ${fmtIsk(bestBuy)} ISK/u — ` +
+        `${(bestBuy / apprUnit).toFixed(1)}× appraised. Sell ${best.name} to beat buyback.`);
+    }
+
+    // Case B: the best buy order in the region is not at Jita 4-4.
+    const jitaBuy = buyMaxOf(jitaData[best.id]);
+    if (bestBuy > 0 && bestBuy > jitaBuy && bestBuy >= jitaBuy * ALERT_NONJITA_RATIO) {
+      out.push(jitaBuy > 0
+        ? `Top ${best.name} buy is off-Jita: ${fmtIsk(bestBuy)} vs ${fmtIsk(jitaBuy)} at Jita 4-4.`
+        : `${cap(best.name)} buy ${fmtIsk(bestBuy)} ISK/u in region — none at Jita 4-4.`);
+    }
+    return out;
   }
 
   async function appraise() {
@@ -230,10 +363,15 @@
       // unique set of every raw + compressed type in the haul
       const ids = new Set();
       for (const { ore } of haul.values()) { ids.add(ore.raw); ids.add(ore.comp); }
-      const data = await fetchAggregates([...ids]);
+      const idList = [...ids];
+      // region drives the appraisal; Jita 4-4 is fetched alongside for the alerts
+      const [data, jita] = await Promise.all([
+        fetchAggregates(idList, `region=${REGION_THE_FORGE}`),
+        fetchAggregates(idList, `station=${JITA_4_4_STATION}`),
+      ]);
 
       const rows = [];
-      let totalIsk = 0, totalVol = 0;
+      let totalIsk = 0;
       for (const { ore, qty } of haul.values()) {
         const rawMid = midFrom(data[ore.raw]);
         const compMid = midFrom(data[ore.comp]);
@@ -247,20 +385,18 @@
 
         const unavailable = unit == null;
         const lineValue = unavailable ? 0 : unit * qty;
-        const vol = qty * (ore.vol || 0);
         if (!unavailable) totalIsk += lineValue;
-        totalVol += vol;
+        const alerts = unavailable ? [] : buildAlerts(ore, data, jita, unit);
 
         rows.push({
           rawId: ore.raw, name: ore.name, qty, rawMid, compMid,
-          basis, unit, lineValue, unavailable, vol,
+          basis, unit, lineValue, unavailable, alerts,
         });
       }
 
-      lastAppraisal = { rows, totalIsk, totalVol, at: new Date() };
+      lastAppraisal = { rows, totalIsk, at: new Date() };
       render();
-      els.totalVol.textContent = fmtVol(totalVol) + " m³";
-      els.totalIsk.textContent = fmtIntIsk(totalIsk) + " ISK";
+      renderTotals();
       els.totals.classList.remove("hidden");
       els.resultActions.classList.remove("hidden");
       els.pricedAt.textContent = "PRICED " + lastAppraisal.at.toLocaleString();
@@ -335,12 +471,19 @@
     for (const r of lastAppraisal.rows) {
       const name = r.name.padEnd(26).slice(0, 26);
       if (r.unavailable) { L.push(name + "  " + fmtQty(r.qty).padStart(12) + "   (no market)"); continue; }
+      const flag = r.alerts && r.alerts.length ? "  (!)" : "";
       L.push(name + "  " + fmtQty(r.qty).padStart(12) + "   " +
-        fmtIntIsk(r.lineValue).padStart(16) + " ISK  [" + r.basis.slice(0, 6) + "]");
+        fmtIntIsk(r.lineValue).padStart(16) + " ISK  [" + r.basis.slice(0, 6) + "]" + flag);
     }
     L.push("".padEnd(44, "-"));
-    L.push("TOTAL VOLUME: " + fmtVol(lastAppraisal.totalVol) + " m3");
-    L.push("TOTAL VALUE : " + fmtIntIsk(lastAppraisal.totalIsk) + " ISK");
+    const gross = lastAppraisal.totalIsk;
+    if (buybackPct < 100) {
+      L.push("APPRAISED   : " + fmtIntIsk(gross) + " ISK");
+      L.push("BUYBACK " + (buybackPct + "%").padEnd(4) + ": -" + fmtIntIsk(gross - gross * buybackRate) + " ISK");
+      L.push("PAYOUT      : " + fmtIntIsk(gross * buybackRate) + " ISK");
+    } else {
+      L.push("TOTAL VALUE : " + fmtIntIsk(gross) + " ISK");
+    }
     return L.join("\n");
   }
 
@@ -430,6 +573,13 @@
     els.oreInput.value = ""; els.qtyInput.value = ""; els.oreInput.focus();
   });
 
+  els.buybackRange.addEventListener("input", () => {
+    buybackPct = parseInt(els.buybackRange.value, 10);
+    buybackRate = buybackPct / 100;
+    els.buybackVal.textContent = buybackPct + "%";
+    if (lastAppraisal) renderTotals();
+  });
+
   els.pasteImport.addEventListener("click", importPaste);
   els.appraiseBtn.addEventListener("click", appraise);
   els.clearBtn.addEventListener("click", () => {
@@ -441,6 +591,7 @@
   });
 
   // ---- init ---------------------------------------------------------------
+  sortableThs.forEach((th) => th.addEventListener("click", () => onSortClick(th.dataset.sort)));
   render();
   els.oreInput.focus();
 })();

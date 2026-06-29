@@ -90,12 +90,12 @@
         <table id="haul-table" class="data-table">
           <thead>
             <tr>
-              <th class="c-ore">ORE</th>
-              <th class="num">QTY (RAW)</th>
+              <th class="c-ore sortable" data-sort="name">ORE<span class="sort-ind"></span></th>
+              <th class="num sortable" data-sort="qty">QTY (RAW)<span class="sort-ind"></span></th>
               <th class="num col-appr">UNCOMP /u</th>
               <th class="num col-appr">COMP /u</th>
               <th class="c-basis col-appr">BASIS</th>
-              <th class="num col-appr">VALUE</th>
+              <th class="num col-appr sortable" data-sort="value">VALUE<span class="sort-ind"></span></th>
               <th class="c-act"></th>
             </tr>
           </thead>
@@ -109,14 +109,15 @@
   <section class="actionbar">
     <button id="appraise-btn" class="btn btn-primary btn-lg" disabled>APPRAISE HAUL</button>
     <button id="clear-btn" class="btn btn-ghost" disabled>CLEAR</button>
+    <div class="buyback" title="Pay the seller this percentage of appraised value">
+      <label for="buyback-range">BUYBACK</label>
+      <input id="buyback-range" type="range" min="50" max="100" step="1" value="100" aria-describedby="buyback-val">
+      <output id="buyback-val" for="buyback-range">100%</output>
+    </div>
     <div class="spacer"></div>
     <div id="totals" class="totals hidden">
-      <div class="total-block">
-        <span class="total-label">TOTAL VOLUME</span>
-        <span id="total-vol" class="total-val">— m³</span>
-      </div>
       <div class="total-block total-isk">
-        <span class="total-label">APPRAISED VALUE</span>
+        <span class="total-label" id="total-label">APPRAISED VALUE</span>
         <span id="total-isk" class="total-val">— ISK</span>
       </div>
     </div>
@@ -139,6 +140,7 @@
 </footer>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="alert-tip" class="alert-tip hidden" role="tooltip"></div>
 
 <script src="ores.js"></script>
 <script src="app.js"></script>
