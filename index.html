@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Splitrock Mining Co. — Ore Appraisal Terminal</title>
+<meta name="description" content="Ore appraisal terminal for Splitrock Mining Company. Values your haul against The Forge market, taking the lower of compressed vs uncompressed mid-price.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="hazard-bar" aria-hidden="true"></div>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <div class="brand">
+      <svg class="emblem" viewBox="0 0 64 64" aria-hidden="true">
+        <polygon points="32,3 58,18 58,46 32,61 6,46 6,18" fill="none" stroke="currentColor" stroke-width="3"/>
+        <polygon points="32,12 50,22.5 50,41.5 32,52 14,41.5 14,22.5" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5"/>
+        <path d="M22 40 L32 22 L42 40 Z" fill="currentColor"/>
+        <line x1="32" y1="22" x2="32" y2="40" stroke="#15171a" stroke-width="2"/>
+      </svg>
+      <div class="brand-text">
+        <div class="corp">SPLITROCK MINING COMPANY</div>
+        <h1 class="title">ORE APPRAISAL TERMINAL</h1>
+      </div>
+    </div>
+    <div class="header-meta">
+      <span class="tag">UNIT&nbsp;SRK&middot;APR</span>
+      <span class="tag tag-accent">v1.0</span>
+    </div>
+  </div>
+</header>
+
+<div class="readout">
+  <div class="wrap readout-inner">
+    <span><b>MARKET</b> The Forge / Jita</span>
+    <span class="sep">//</span>
+    <span><b>PRICE</b> mid of highest&nbsp;buy &amp; lowest&nbsp;sell</span>
+    <span class="sep">//</span>
+    <span><b>BASIS</b> lower of compressed vs uncompressed</span>
+    <span class="sep">//</span>
+    <span class="src">SRC <a href="https://market.fuzzwork.co.uk/aggregates/" target="_blank" rel="noopener">Fuzzwork</a> (ESI)</span>
+  </div>
+</div>
+
+<main class="wrap">
+
+  <section class="panel">
+    <div class="panel-head">
+      <span class="panel-title">// ADD ORE</span>
+    </div>
+    <div class="panel-body">
+      <form id="add-form" class="add-row" autocomplete="off">
+        <div class="field grow">
+          <label for="ore-input">ORE TYPE</label>
+          <input id="ore-input" placeholder="Search ore — e.g. Veldspar, Scordite iii, Bistot 4…" spellcheck="false"
+                 autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="ac-menu">
+          <div id="ac-menu" class="ac-menu hidden" role="listbox"></div>
+        </div>
+        <div class="field qty">
+          <label for="qty-input">QUANTITY</label>
+          <input id="qty-input" type="text" inputmode="numeric" placeholder="0">
+        </div>
+        <button type="submit" class="btn btn-primary">ADD</button>
+      </form>
+
+      <details class="paste">
+        <summary>PASTE FROM INVENTORY</summary>
+        <p class="hint">Select items in your ore hold &rarr; right-click &rarr; <b>Copy</b>, then paste here. Lines like <code>Veldspar&nbsp;&nbsp;12,480</code> or <code>Compressed Bistot&nbsp;&nbsp;300</code> are recognised. Compressed quantities are converted to raw units automatically.</p>
+        <textarea id="paste-input" rows="5" placeholder="Veldspar&#9;12480&#10;Compressed Scordite&#9;540&#10;Glacial Mass&#9;200"></textarea>
+        <div class="paste-actions">
+          <button type="button" id="paste-import" class="btn btn-ghost">IMPORT</button>
+          <span id="paste-status" class="paste-status"></span>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <span class="panel-title">// HAUL MANIFEST</span>
+      <span id="manifest-count" class="panel-sub">0 LINES</span>
+    </div>
+    <div class="panel-body no-pad">
+      <div class="table-scroll">
+        <table id="haul-table" class="data-table">
+          <thead>
+            <tr>
+              <th class="c-ore">ORE</th>
+              <th class="num">QTY (RAW)</th>
+              <th class="num col-appr">UNCOMP /u</th>
+              <th class="num col-appr">COMP /u</th>
+              <th class="c-basis col-appr">BASIS</th>
+              <th class="num col-appr">VALUE</th>
+              <th class="c-act"></th>
+            </tr>
+          </thead>
+          <tbody id="haul-body"></tbody>
+        </table>
+      </div>
+      <div id="empty-state" class="empty">NO ORE LOADED — ADD TYPES ABOVE OR PASTE YOUR HOLD.</div>
+    </div>
+  </section>
+
+  <section class="actionbar">
+    <button id="appraise-btn" class="btn btn-primary btn-lg" disabled>APPRAISE HAUL</button>
+    <button id="clear-btn" class="btn btn-ghost" disabled>CLEAR</button>
+    <div class="spacer"></div>
+    <div id="totals" class="totals hidden">
+      <div class="total-block">
+        <span class="total-label">TOTAL VOLUME</span>
+        <span id="total-vol" class="total-val">— m³</span>
+      </div>
+      <div class="total-block total-isk">
+        <span class="total-label">APPRAISED VALUE</span>
+        <span id="total-isk" class="total-val">— ISK</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="result-actions" class="result-actions hidden">
+    <button id="copy-btn" class="btn btn-ghost">COPY APPRAISAL TEXT</button>
+    <span id="action-status" class="action-status"></span>
+    <span id="priced-at" class="priced-at"></span>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="hazard-bar" aria-hidden="true"></div>
+  <div class="wrap footer-inner">
+    <span>SPONSORED &amp; OPERATED BY <b>SPLITROCK MINING COMPANY</b></span>
+    <span class="disc">Unofficial tool. Market data via Fuzzwork &amp; ESI. Not affiliated with CCP Games. EVE Online is a trademark of CCP hf.</span>
+  </div>
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="ores.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
