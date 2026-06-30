@@ -6,18 +6,28 @@ the compressed vs. uncompressed** mid-price for every ore.
 
 ## How the price is calculated
 
-For each ore in the haul:
+For each ore, `mid = (highest buy + lowest sell) / 2` in The Forge (region `10000002`), computed
+for both the raw type and its compressed type. In the current (Equinox) compression system
+**1 compressed unit == 1 raw unit** (compression only shrinks volume, not unit count or
+reprocessing yield), so the two are directly comparable. `line value = per-unit value × quantity`.
 
-1. Look up the **highest buy order** and **lowest sell order** in The Forge (region `10000002`)
-   for both the raw type *and* its compressed type.
-2. `mid = (highest buy + lowest sell) / 2` for each.
-3. In the current (Equinox) compression system **1 compressed unit == 1 raw unit** — compression
-   only shrinks volume, not unit count or reprocessing yield — so the raw and compressed mids are
-   compared **directly**.
-4. The **lower** of the two is the per-unit value. `line value = per-unit value × quantity`.
+If only one side of the book exists, that side is used as the mid; a type with no market at all is
+flagged `no market` and contributes 0.
 
-If only one side of the book exists (e.g. no buy orders), that side is used as the mid. If a
-type has no market at all it is flagged `no market` and contributes 0.
+### Pricing method (dropdown)
+
+The **METHOD** dropdown picks how the per-unit value is chosen. Switching recomputes instantly from
+the last fetch — no re-appraisal:
+
+| Method | Per-unit value |
+|--------|----------------|
+| **Lower of comp/uncomp** | the lower of the two mids (conservative; the original behaviour) |
+| **Per-line mid** | the mid of the form each line was entered as — raw lines as raw, `Compressed …` lines as compressed |
+| **Jita instant sell (buy)** | the **highest buy order at Jita 4-4** for the form each line is in — what you'd get dumping it instantly |
+
+The first two use region mids; the last uses Jita 4-4 (`station=60003760`) buy orders. The two
+price columns and the basis pill follow the selected method. The dropdown sits in the readout strip
+beneath the header.
 
 ## Buyback rate
 
@@ -74,8 +84,8 @@ keys + Enter (or click) to pick a suggestion, then enter a quantity.
 
 Click the **ORE**, **QTY**, or **VALUE** column headers to sort the manifest (alphabetical,
 quantity, or appraised value). Click again to reverse; an arrow marks the active column. Sorting
-by value is available once the haul has been appraised. Removing a line after an appraisal updates
-the total in place — no need to re-appraise.
+by value is available once the haul has been appraised. Removing a line or editing a quantity after
+an appraisal re-prices from the stored market snapshot in place — no need to re-appraise.
 
 ## Output
 

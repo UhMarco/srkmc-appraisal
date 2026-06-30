@@ -31,6 +31,7 @@
   let buybackRate = 1;      // buybackPct / 100
   let sortKey = null;       // null | 'name' | 'qty' | 'value'
   let sortDir = 1;          // 1 = ascending, -1 = descending
+  let priceMethod = "lower"; // 'lower' | 'compressed' | 'perline' | 'jitabuy'
 
   // ---- elements -----------------------------------------------------------
   const $ = (id) => document.getElementById(id);
@@ -41,6 +42,7 @@
     table: $("haul-table"), body: $("haul-body"), empty: $("empty-state"),
     count: $("manifest-count"),
     appraiseBtn: $("appraise-btn"), clearBtn: $("clear-btn"),
+    methodSelect: $("method-select"),
     buybackRange: $("buyback-range"), buybackVal: $("buyback-val"), totalLabel: $("total-label"),
     totals: $("totals"), totalIsk: $("total-isk"),
     resultActions: $("result-actions"), copyBtn: $("copy-btn"),
@@ -115,11 +117,12 @@
   }
 
   // ---- haul mutation ------------------------------------------------------
-  function addToHaul(ore, qty) {
+  // form: 'raw' or 'comp' — the variant the line was entered as (used by per-line pricing)
+  function addToHaul(ore, qty, form) {
     if (!ore || !(qty > 0)) return false;
     const cur = haul.get(ore.raw);
-    if (cur) cur.qty += qty;
-    else haul.set(ore.raw, { ore, qty });
+    if (cur) cur.qty += qty;                       // merge by ore; keep the first form seen
+    else haul.set(ore.raw, { ore, qty, form: form || "raw" });
     return true;
   }
   function setQty(rawId, qty) {
@@ -160,7 +163,7 @@
       qi.className = "qty-edit"; qi.type = "text"; qi.value = fmtQty(qty);
       qi.addEventListener("change", () => {
         const v = parseQty(qi.value);
-        if (Number.isFinite(v)) { setQty(ore.raw, v); lastAppraisal = null; afterChange(); }
+        if (Number.isFinite(v)) { setQty(ore.raw, v); refreshAfterEdit(); }
         else qi.value = fmtQty(qty);
       });
       tdQty.appendChild(qi);
@@ -222,19 +225,19 @@
     });
   }
 
-  // Remove a line without forcing a re-appraisal: drop it from the stored result and
-  // recompute the total from the remaining priced rows.
-  function removeRow(rawId) {
-    removeFromHaul(rawId);
-    if (lastAppraisal) {
-      lastAppraisal.rows = lastAppraisal.rows.filter((r) => r.rawId !== rawId);
-      lastAppraisal.totalIsk = lastAppraisal.rows.reduce(
-        (s, r) => s + (r.unavailable ? 0 : r.lineValue), 0);
-      if (haul.size === 0) lastAppraisal = null;
+  function removeRow(rawId) { removeFromHaul(rawId); refreshAfterEdit(); }
+
+  // After a row is removed or a quantity edited, re-price from the stored market snapshot
+  // (no re-fetch) so the user never has to press Appraise again for those edits.
+  function refreshAfterEdit() {
+    if (lastAppraisal && haul.size > 0) {
+      computeRows(); render(); renderTotals();
+    } else {
+      lastAppraisal = null;
+      render();
+      els.totals.classList.add("hidden");
+      els.resultActions.classList.add("hidden");
     }
-    render();
-    if (lastAppraisal) renderTotals();
-    else { els.totals.classList.add("hidden"); els.resultActions.classList.add("hidden"); }
   }
 
   // ---- sorting ------------------------------------------------------------
@@ -355,6 +358,63 @@
     return out;
   }
 
+  // ---- pricing method -----------------------------------------------------
+  const METHOD_DESC = {
+    lower: "lower of compressed / uncompressed mid",
+    perline: "per-line form mid-price",
+    jitabuy: "instant Jita sell — your form's buy order",
+  };
+  const orNull = (n) => (n > 0 ? n : null);
+
+  // per-unit price of an ore under the active method, plus the per-form prices shown in the
+  // grid (pUn/pCo) and which form the chosen value came from.
+  function priceOre(ore, form, data, jita, method) {
+    let pUn, pCo;
+    if (method === "jitabuy") {              // highest Jita 4-4 buy order per form
+      pUn = orNull(buyMaxOf(jita[ore.raw]));
+      pCo = orNull(buyMaxOf(jita[ore.comp]));
+    } else {                                 // region mid per form
+      pUn = midFrom(data[ore.raw]);
+      pCo = midFrom(data[ore.comp]);
+    }
+    let unit = null, basis = null;
+    const setU = () => { unit = pUn; basis = "uncompressed"; };
+    const setC = () => { unit = pCo; basis = "compressed"; };
+
+    if (method === "perline" || method === "jitabuy") {
+      // value the form the line is actually in (Jita buy order for jitabuy, region mid otherwise)
+      if (form === "comp") { if (pCo != null) setC(); else if (pUn != null) setU(); }
+      else { if (pUn != null) setU(); else if (pCo != null) setC(); }
+    } else {                                 // 'lower' — conservative current method
+      if (pUn != null && pCo != null) (pCo <= pUn ? setC() : setU());
+      else if (pUn != null) setU(); else if (pCo != null) setC();
+    }
+    return { pUn, pCo, unit, basis, unavailable: unit == null };
+  }
+
+  // Rebuild priced rows from the stored market snapshot for the current haul/method/forms.
+  // No network — runs after appraise and on every method, quantity or remove change.
+  function computeRows() {
+    if (!lastAppraisal) return;
+    const { data, jita } = lastAppraisal;
+    const rows = [];
+    let totalIsk = 0;
+    for (const { ore, qty, form } of haul.values()) {
+      if (!data[ore.raw] && !data[ore.comp]) continue;   // added after snapshot: leave unpriced
+      const p = priceOre(ore, form, data, jita, priceMethod);
+      const lineValue = p.unavailable ? 0 : p.unit * qty;
+      if (!p.unavailable) totalIsk += lineValue;
+      const alerts = p.unavailable ? [] : buildAlerts(ore, data, jita, p.unit);
+      rows.push({
+        rawId: ore.raw, name: ore.name, qty, form,
+        rawMid: p.pUn, compMid: p.pCo, basis: p.basis,
+        unit: p.unit, lineValue, unavailable: p.unavailable, alerts,
+      });
+    }
+    lastAppraisal.rows = rows;
+    lastAppraisal.totalIsk = totalIsk;
+  }
+
   async function appraise() {
     if (haul.size === 0) return;
     setBtnLoading(els.appraiseBtn, true);
@@ -370,31 +430,8 @@
         fetchAggregates(idList, `station=${JITA_4_4_STATION}`),
       ]);
 
-      const rows = [];
-      let totalIsk = 0;
-      for (const { ore, qty } of haul.values()) {
-        const rawMid = midFrom(data[ore.raw]);
-        const compMid = midFrom(data[ore.comp]);
-
-        let basis = null, unit = null;
-        if (rawMid != null && compMid != null) {
-          if (compMid <= rawMid) { basis = "compressed"; unit = compMid; }
-          else { basis = "uncompressed"; unit = rawMid; }
-        } else if (rawMid != null) { basis = "uncompressed"; unit = rawMid; }
-        else if (compMid != null) { basis = "compressed"; unit = compMid; }
-
-        const unavailable = unit == null;
-        const lineValue = unavailable ? 0 : unit * qty;
-        if (!unavailable) totalIsk += lineValue;
-        const alerts = unavailable ? [] : buildAlerts(ore, data, jita, unit);
-
-        rows.push({
-          rawId: ore.raw, name: ore.name, qty, rawMid, compMid,
-          basis, unit, lineValue, unavailable, alerts,
-        });
-      }
-
-      lastAppraisal = { rows, totalIsk, at: new Date() };
+      lastAppraisal = { data, jita, rows: [], totalIsk: 0, at: new Date() };
+      computeRows();
       render();
       renderTotals();
       els.totals.classList.remove("hidden");
@@ -444,8 +481,9 @@
       const ore = parsed ? byName.get(parsed.name.toLowerCase()) : null;
       if (!ore) { unmatched.push(line); continue; }
 
+      const isComp = /^\s*compressed\b/i.test(parsed.name);
       const existed = haul.has(ore.raw);
-      addToHaul(ore, parsed.qty);
+      addToHaul(ore, parsed.qty, isComp ? "comp" : "raw");
       if (existed) merged++; else added++;
     }
 
@@ -466,7 +504,7 @@
     const L = [];
     L.push("SPLITROCK MINING CO. — ORE APPRAISAL");
     L.push("Market: The Forge · " + lastAppraisal.at.toLocaleString());
-    L.push("Basis: lower of compressed / uncompressed mid-price");
+    L.push("Method: " + METHOD_DESC[priceMethod]);
     L.push("".padEnd(44, "-"));
     for (const r of lastAppraisal.rows) {
       const name = r.name.padEnd(26).slice(0, 26);
@@ -567,10 +605,16 @@
     if (!ore) { toast("Unknown ore — pick one from the list"); els.oreInput.focus(); return; }
     const qty = parseQty(els.qtyInput.value);
     if (!Number.isFinite(qty) || qty <= 0) { toast("Enter a quantity"); els.qtyInput.focus(); return; }
-    addToHaul(ore, qty);
+    const isComp = /^\s*compressed\b/i.test(els.oreInput.value);
+    addToHaul(ore, qty, isComp ? "comp" : "raw");
     lastAppraisal = null;
     afterChange();
     els.oreInput.value = ""; els.qtyInput.value = ""; els.oreInput.focus();
+  });
+
+  els.methodSelect.addEventListener("change", () => {
+    priceMethod = els.methodSelect.value;
+    if (lastAppraisal) { computeRows(); render(); renderTotals(); }
   });
 
   els.buybackRange.addEventListener("input", () => {
