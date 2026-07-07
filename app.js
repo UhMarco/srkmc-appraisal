@@ -12,8 +12,7 @@
   const JITA_4_4_STATION = 60003760;
   const FUZZWORK = "https://market.fuzzwork.co.uk/aggregates/";
 
-  // alert thresholds (see buildAlerts) — easy to tune
-  const ALERT_FORM_RATIO = 1.25;     // a form's buy order >= this x the appraised unit value
+  // alert threshold (see buildAlerts) — easy to tune
   const ALERT_NONJITA_RATIO = 1.05;  // best regional buy >= this x the Jita 4-4 buy
 
   // ---- lookups ------------------------------------------------------------
@@ -31,7 +30,6 @@
   let buybackRate = 1;      // buybackPct / 100
   let sortKey = null;       // null | 'name' | 'qty' | 'value'
   let sortDir = 1;          // 1 = ascending, -1 = descending
-  let priceMethod = "lower"; // 'lower' | 'compressed' | 'perline' | 'jitabuy'
 
   // ---- elements -----------------------------------------------------------
   const $ = (id) => document.getElementById(id);
@@ -42,7 +40,6 @@
     table: $("haul-table"), body: $("haul-body"), empty: $("empty-state"),
     count: $("manifest-count"),
     appraiseBtn: $("appraise-btn"), clearBtn: $("clear-btn"),
-    methodSelect: $("method-select"),
     buybackRange: $("buyback-range"), buybackVal: $("buyback-val"), totalLabel: $("total-label"),
     totals: $("totals"), totalIsk: $("total-isk"),
     resultActions: $("result-actions"), copyBtn: $("copy-btn"),
@@ -304,18 +301,6 @@
   }
   function hideTip() { els.alertTip.classList.add("hidden"); }
 
-  // ---- pricing ------------------------------------------------------------
-  // mid = average of highest buy and lowest sell; if only one side exists use it.
-  function midFrom(agg) {
-    if (!agg) return null;
-    const sellMin = parseFloat(agg.sell && agg.sell.min) || 0;
-    const buyMax = parseFloat(agg.buy && agg.buy.max) || 0;
-    if (sellMin > 0 && buyMax > 0) return (sellMin + buyMax) / 2;
-    if (sellMin > 0) return sellMin;
-    if (buyMax > 0) return buyMax;
-    return null;
-  }
-
   async function fetchAggregates(typeIds, scopeParam) {
     const url = `${FUZZWORK}?${scopeParam}&types=${typeIds.join(",")}`;
     const res = await fetch(url);
@@ -329,10 +314,10 @@
   };
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
-  // Informational flags (never affect the appraisal): surface buy orders that beat the
-  // conservative appraised value — a different ore form, or a non-Jita order in the region —
-  // so the user can decide to haul/sell those lines themselves instead.
-  function buildAlerts(ore, regData, jitaData, apprUnit) {
+  // Informational flag (never affects the appraisal): if the best buy order for this ore in
+  // The Forge is parked at a station other than Jita 4-4, surface it so the user can decide to
+  // sell it there instead.
+  function buildAlerts(ore, regData, jitaData) {
     const out = [];
     const forms = [
       { name: "uncompressed", id: ore.raw },
@@ -341,14 +326,6 @@
     forms.sort((a, b) => buyMaxOf(regData[b.id]) - buyMaxOf(regData[a.id]));
     const best = forms[0];
     const bestBuy = buyMaxOf(regData[best.id]);
-
-    // Case A: the best buy order (either form) sits well above the appraised value.
-    if (apprUnit > 0 && bestBuy >= apprUnit * ALERT_FORM_RATIO) {
-      out.push(`${cap(best.name)} buy ${fmtIsk(bestBuy)} ISK/u — ` +
-        `${(bestBuy / apprUnit).toFixed(1)}× appraised. Sell ${best.name} to beat buyback.`);
-    }
-
-    // Case B: the best buy order in the region is not at Jita 4-4.
     const jitaBuy = buyMaxOf(jitaData[best.id]);
     if (bestBuy > 0 && bestBuy > jitaBuy && bestBuy >= jitaBuy * ALERT_NONJITA_RATIO) {
       out.push(jitaBuy > 0
@@ -358,37 +335,22 @@
     return out;
   }
 
-  // ---- pricing method -----------------------------------------------------
-  const METHOD_DESC = {
-    lower: "lower of compressed / uncompressed mid",
-    perline: "per-line form mid-price",
-    jitabuy: "instant Jita sell — your form's buy order",
-  };
+  // ---- pricing ------------------------------------------------------------
+  // Instant Jita sell: value each line at the highest Jita 4-4 buy order for the form it is
+  // actually in (raw line -> raw buy, compressed line -> compressed buy). pUn/pCo are the two
+  // per-form buy prices shown in the grid; falls back to the other form only if the held form
+  // has no buy order at all.
+  const METHOD_LABEL = "instant Jita sell — Jita 4-4 buy order for the form held";
   const orNull = (n) => (n > 0 ? n : null);
 
-  // per-unit price of an ore under the active method, plus the per-form prices shown in the
-  // grid (pUn/pCo) and which form the chosen value came from.
-  function priceOre(ore, form, data, jita, method) {
-    let pUn, pCo;
-    if (method === "jitabuy") {              // highest Jita 4-4 buy order per form
-      pUn = orNull(buyMaxOf(jita[ore.raw]));
-      pCo = orNull(buyMaxOf(jita[ore.comp]));
-    } else {                                 // region mid per form
-      pUn = midFrom(data[ore.raw]);
-      pCo = midFrom(data[ore.comp]);
-    }
+  function priceOre(ore, form, jita) {
+    const pUn = orNull(buyMaxOf(jita[ore.raw]));
+    const pCo = orNull(buyMaxOf(jita[ore.comp]));
     let unit = null, basis = null;
     const setU = () => { unit = pUn; basis = "uncompressed"; };
     const setC = () => { unit = pCo; basis = "compressed"; };
-
-    if (method === "perline" || method === "jitabuy") {
-      // value the form the line is actually in (Jita buy order for jitabuy, region mid otherwise)
-      if (form === "comp") { if (pCo != null) setC(); else if (pUn != null) setU(); }
-      else { if (pUn != null) setU(); else if (pCo != null) setC(); }
-    } else {                                 // 'lower' — conservative current method
-      if (pUn != null && pCo != null) (pCo <= pUn ? setC() : setU());
-      else if (pUn != null) setU(); else if (pCo != null) setC();
-    }
+    if (form === "comp") { if (pCo != null) setC(); else if (pUn != null) setU(); }
+    else { if (pUn != null) setU(); else if (pCo != null) setC(); }
     return { pUn, pCo, unit, basis, unavailable: unit == null };
   }
 
@@ -401,10 +363,10 @@
     let totalIsk = 0;
     for (const { ore, qty, form } of haul.values()) {
       if (!data[ore.raw] && !data[ore.comp]) continue;   // added after snapshot: leave unpriced
-      const p = priceOre(ore, form, data, jita, priceMethod);
+      const p = priceOre(ore, form, jita);
       const lineValue = p.unavailable ? 0 : p.unit * qty;
       if (!p.unavailable) totalIsk += lineValue;
-      const alerts = p.unavailable ? [] : buildAlerts(ore, data, jita, p.unit);
+      const alerts = p.unavailable ? [] : buildAlerts(ore, data, jita);
       rows.push({
         rawId: ore.raw, name: ore.name, qty, form,
         rawMid: p.pUn, compMid: p.pCo, basis: p.basis,
@@ -504,7 +466,7 @@
     const L = [];
     L.push("SPLITROCK MINING CO. — ORE APPRAISAL");
     L.push("Market: The Forge · " + lastAppraisal.at.toLocaleString());
-    L.push("Method: " + METHOD_DESC[priceMethod]);
+    L.push("Method: " + METHOD_LABEL);
     L.push("".padEnd(44, "-"));
     for (const r of lastAppraisal.rows) {
       const name = r.name.padEnd(26).slice(0, 26);
@@ -610,11 +572,6 @@
     lastAppraisal = null;
     afterChange();
     els.oreInput.value = ""; els.qtyInput.value = ""; els.oreInput.focus();
-  });
-
-  els.methodSelect.addEventListener("change", () => {
-    priceMethod = els.methodSelect.value;
-    if (lastAppraisal) { computeRows(); render(); renderTotals(); }
   });
 
   els.buybackRange.addEventListener("input", () => {

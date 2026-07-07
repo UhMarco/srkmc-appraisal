@@ -6,28 +6,14 @@ the compressed vs. uncompressed** mid-price for every ore.
 
 ## How the price is calculated
 
-For each ore, `mid = (highest buy + lowest sell) / 2` in The Forge (region `10000002`), computed
-for both the raw type and its compressed type. In the current (Equinox) compression system
-**1 compressed unit == 1 raw unit** (compression only shrinks volume, not unit count or
-reprocessing yield), so the two are directly comparable. `line value = per-unit value × quantity`.
+Each line is valued at **instant Jita sell** — the **highest buy order at Jita 4-4**
+(`station=60003760`) for the form the line is actually in. A raw line uses the raw buy order, a
+`Compressed …` line uses the compressed buy order; it only falls back to the other form if the held
+form has no buy order at all. In the current (Equinox) compression system 1 compressed unit == 1
+raw unit, so the two forms are interchangeable in content. `line value = buy price × quantity`.
 
-If only one side of the book exists, that side is used as the mid; a type with no market at all is
-flagged `no market` and contributes 0.
-
-### Pricing method (dropdown)
-
-The **METHOD** dropdown picks how the per-unit value is chosen. Switching recomputes instantly from
-the last fetch — no re-appraisal:
-
-| Method | Per-unit value |
-|--------|----------------|
-| **Lower of comp/uncomp** | the lower of the two mids (conservative; the original behaviour) |
-| **Per-line mid** | the mid of the form each line was entered as — raw lines as raw, `Compressed …` lines as compressed |
-| **Jita instant sell (buy)** | the **highest buy order at Jita 4-4** for the form each line is in — what you'd get dumping it instantly |
-
-The first two use region mids; the last uses Jita 4-4 (`station=60003760`) buy orders. The two
-price columns and the basis pill follow the selected method. The dropdown sits in the readout strip
-beneath the header.
+A type with no buy order at all is flagged `no market` and contributes 0. The two grid columns show
+each form's Jita buy price and the basis pill shows which form was used.
 
 ## Buyback rate
 
@@ -37,17 +23,10 @@ re-fetch needed — and the total is annotated `@ N% BUYBACK` when below 100%. V
 
 ## Alerts (`!`)
 
-After an appraisal, a `!` flag appears next to any ore where a buy order beats the conservative
-appraised value. Hovering it shows why. Two cases, **purely informational — they never change the
-appraisal**:
-
-1. **Form divergence** — a buy order for the *other* form (e.g. uncompressed when the appraisal
-   used compressed) is paying ≥ 1.25× the appraised value. Common when uncompressed temporarily
-   trades well above compressed; you may prefer to sell that form yourself.
-2. **Non-Jita order** — the best buy order in The Forge is ≥ 1.05× the Jita 4-4 price, i.e. the
-   top order is parked at another station/system in the region rather than Jita.
-
-Thresholds are the `ALERT_FORM_RATIO` / `ALERT_NONJITA_RATIO` constants at the top of `app.js`.
+After an appraisal, a `!` flag appears next to an ore when the best buy order for it in The Forge is
+≥ 1.05× the Jita 4-4 price — i.e. the top order is parked at **another station/system in the region**
+rather than Jita, so you could get more selling it there. Purely informational; it never changes the
+appraisal. The threshold is the `ALERT_NONJITA_RATIO` constant at the top of `app.js`.
 
 ## Data source
 
